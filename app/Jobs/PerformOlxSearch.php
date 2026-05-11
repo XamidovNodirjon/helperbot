@@ -32,20 +32,26 @@ class PerformOlxSearch implements ShouldQueue
         $this->filters = $filters;
     }
 
+    Cache::put($cacheKey, [
+        'listings'   => $result['listings'],
+        'searchUrl'  => $result['searchUrl'],
+        'searchNote' => $result['searchNote'],
+        'filters'    => $this->filters, // ← BU QATORNI QO'SHING
+    ], now()->addHours(2));
+
     /**
      * Execute the job.
      */
     public function handle(): void
-    {
-        \Log::info('Job OLX Search started', ['chatId' => $this->chatId, 'filters' => $this->filters]);
+{
+    \Log::info('Job OLX Search started', [
+        'chatId'  => $this->chatId,
+        'filters' => $this->filters,
+    ]);
 
+    try {
         $scraper = new OlxScraperService();
         $result  = $scraper->search($this->filters);
-
-        \Log::info('Job OLX Search result', [
-            'count'     => count($result['listings'] ?? []),
-            'searchUrl' => $result['searchUrl'] ?? '',
-        ]);
 
         if (empty($result['listings'])) {
             Telegram::sendMessage([
@@ -55,17 +61,14 @@ class PerformOlxSearch implements ShouldQueue
             return;
         }
 
-        // ─── Barcha e'lonlarni Cache ga saqlash (2 soat) ──────────────────────
         $cacheKey = 'olx_results_' . $this->chatId;
         Cache::put($cacheKey, [
             'listings'   => $result['listings'],
             'searchUrl'  => $result['searchUrl'],
             'searchNote' => $result['searchNote'],
+            'filters'    => $this->filters,
         ], now()->addHours(2));
 
-        \Log::info('OLX results cached', ['key' => $cacheKey, 'total' => count($result['listings'])]);
-
-        // ─── Izoh xabar (agar mavjud bo'lsa) ─────────────────────────────────
         if (!empty($result['searchNote'])) {
             Telegram::sendMessage([
                 'chat_id'    => $this->chatId,
@@ -74,7 +77,19 @@ class PerformOlxSearch implements ShouldQueue
             ]);
         }
 
-        // ─── Birinchi 2 ta e'lonni yuborish ───────────────────────────────────
         OlxListingPresenter::sendPage($this->chatId, $cacheKey, 0);
+
+    } catch (\Throwable $e) {
+        \Log::error('PerformOlxSearch job xatosi: ' . $e->getMessage());
+
+        try {
+            Telegram::sendMessage([
+                'chat_id' => $this->chatId,
+                'text'    => "❌ Qidirishda xatolik yuz berdi. Iltimos qaytadan urinib ko'ring.",
+            ]);
+        } catch (\Throwable $telegramError) {
+            \Log::error('Telegram xabar yuborishda xatolik: ' . $telegramError->getMessage());
+        }
     }
+}
 }

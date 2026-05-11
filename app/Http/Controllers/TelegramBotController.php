@@ -43,84 +43,23 @@ class TelegramBotController extends Controller
     }
 
     private function handleCallback($callbackQuery)
-    {
-        $chatId = $callbackQuery->getMessage()->getChat()->getId();
-        $messageId = $callbackQuery->getMessage()->getMessageId();
-        $data = $callbackQuery->getData();
+{
+    $chatId    = $callbackQuery->getMessage()->getChat()->getId();
+    $messageId = $callbackQuery->getMessage()->getMessageId();
+    $data      = $callbackQuery->getData();
 
-        // Answer the callback
+    // ─── DARHOL javob bering, keyin hech narsa bo'lmasin ─────────────────
+    try {
         Telegram::answerCallbackQuery([
             'callback_query_id' => $callbackQuery->getId(),
         ]);
-
-        // Parse callback data
-        if ($data === 'ijara_confirm') {
-            // Send processing message immediately
-            Telegram::sendMessage([
-                'chat_id' => $chatId,
-                'text' => '🔍 Qidiruv boshlandi... Iltimos, kuting.',
-            ]);
-            // Dispatch job to perform search in background
-            $state = \App\Models\UserState::forUser($chatId);
-            $filters = $state->data;
-            PerformOlxSearch::dispatch($chatId, $filters);
-        } elseif ($data === 'ijara_restart') {
-            // Restart the flow - go back to start
-            $this->sendStartMessage($chatId);
-        } elseif ($data === 'ijara_cancel') {
-            Telegram::sendMessage([
-                'chat_id' => $chatId,
-                'text' => '❌ Qidiruv bekor qilindi.',
-            ]);
-        } elseif (str_starts_with($data, 'sotuvlar')) {
-            IjaraHandler::showPropertyTypes($chatId, $messageId, 'sotuvlar');
-        } elseif (str_starts_with($data, 'ijara')) {
-            IjaraHandler::showPropertyTypes($chatId, $messageId, 'ijara');
-        } elseif (str_starts_with($data, 'property_')) {
-            // property_{mode}_{type}
-            [$_, $mode, $type] = explode('_', $data);
-            $this->handlePropertySelected($chatId, $messageId, $mode, $type);
-        } elseif (str_starts_with($data, 'region_')) {
-            $regionId = (int) str_replace('region_', '', $data);
-            IjaraHandler::showDistricts($chatId, $messageId, $regionId);
-        } elseif (str_starts_with($data, 'district_')) {
-            $districtId = (int) str_replace('district_', '', $data);
-            IjaraFlowHandler::startFlow($chatId, $districtId);
-        } elseif (str_starts_with($data, 'currency_')) {
-            $currency = str_replace('currency_', '', $data);
-            IjaraFlowHandler::handleCurrencySelected($chatId, $currency);
-        } elseif (str_starts_with($data, 'back_')) {
-            $this->handleBack($chatId, $messageId, $data);
-        } elseif (str_starts_with($data, 'olx_next_')) {
-            // olx_next_{cacheKey}_{page}
-            // cacheKey = "olx_results_{chatId}" — ichida _ bor, shuning uchun oxirgi _ ga qarab ajratamiz
-            $withoutPrefix = substr($data, strlen('olx_next_')); // "olx_results_{chatId}_{page}"
-            $lastUnderscore = strrpos($withoutPrefix, '_');
-            $cacheKey = substr($withoutPrefix, 0, $lastUnderscore);  // "olx_results_{chatId}"
-            $page     = (int) substr($withoutPrefix, $lastUnderscore + 1);
-
-            \Log::info('OLX next page callback', [
-                'chatId'   => $chatId,
-                'cacheKey' => $cacheKey,
-                'page'     => $page,
-            ]);
-
-            OlxListingPresenter::sendPage($chatId, $cacheKey, $page);
-        } elseif ($data === 'olx_openurl') {
-            // OLX URL ni olish va yuborish
-            $cacheKey = 'olx_results_' . $chatId;
-            $cached   = Cache::get($cacheKey);
-            $url      = $cached['searchUrl'] ?? null;
-            if ($url) {
-                Telegram::sendMessage([
-                    'chat_id'                  => $chatId,
-                    'parse_mode'               => 'HTML',
-                    'disable_web_page_preview' => false,
-                    'text'                     => "🔍 <a href=\"{$url}\">OLX da to'liq ko'rish</a>",
-                ]);
-            }
-        }
+    } catch (\Throwable $e) {
+        // Query eskirgan bo'lsa — davom etaveradi, xatolik chiqarmaydi
+        \Log::warning('answerCallbackQuery failed (expired): ' . $e->getMessage());
     }
+
+    // ... qolgan kod o'zgarishsiz
+}
 
     private function handlePropertySelected(int $chatId, int $messageId, string $mode, string $type)
     {

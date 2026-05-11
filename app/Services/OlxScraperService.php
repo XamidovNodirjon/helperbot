@@ -60,130 +60,103 @@ class OlxScraperService
      * @return array{listings: list<array{title:string,price:string,location:string,url:string}>, searchUrl: string, searchNote: string}
      */
     public function search(array $filters): array
-    {
-        $districtName = $filters['district_name'] ?? '';
+{
+    $districtName = $filters['district_name'] ?? '';
+    $startTime    = microtime(true);
 
-        $startTime = microtime(true);
+    // ─── 1-bosqich: district_id + barcha filtrlar ─────────────────────────
+    // district_id URL da bo'lgani uchun filterByDistrict KERAK EMAS
+    // OLX o'zi to'g'ri tumanlarni qaytaradi
+    $url    = $this->buildUrl($filters);
+    $result = $this->fetchAllPages($url, 5); // 3 emas, 5 sahifa
 
-        // ─── 1-bosqich: Aniq filtrlarga mos natija topish (max 3 sahifa kifoya) ───
-        $url    = $this->buildUrl($filters);
-        $result = $this->filterByDistrict($this->fetchAllPages($url, 3), $filters);
+    Log::info('OLX search step 1', ['url' => $url, 'count' => count($result)]);
 
-        Log::info('OLX search URL (exact)', ['url' => $url, 'count' => count($result)]);
+    if (!empty($result)) {
+        return ['listings' => $result, 'searchUrl' => $url, 'searchNote' => ''];
+    }
 
-        if (!empty($result)) {
-            return ['listings' => $result, 'searchUrl' => $url, 'searchNote' => ''];
-        }
-
-        // Check if we already spent too much time
-        if (microtime(true) - $startTime > 45) {
-             return ['listings' => [], 'searchUrl' => $url, 'searchNote' => ''];
-        }
-
-        // ─── 2-bosqich: Narxni ±30% kengaytirish (joylashuv saqlangan holda) ──
-        $relaxedFilters = $this->relaxPriceFilters($filters, 0.30);
-        $relaxedUrl     = $this->buildUrl($relaxedFilters);
-        $result         = $this->filterByDistrict($this->fetchAllPages($relaxedUrl, 3), $relaxedFilters);
-
-        Log::info('OLX search URL (relaxed ±30%)', ['url' => $relaxedUrl, 'count' => count($result)]);
-
-        if (!empty($result)) {
-            return [
-                'listings'   => $result,
-                'searchUrl'  => $relaxedUrl,
-                'searchNote' => "💡 <i>Aniq filtrga mos e'lon topilmadi. Narx oralig'i ±30% kengaytirildi.</i>",
-            ];
-        }
-
-        if (microtime(true) - $startTime > 45) {
-             return ['listings' => [], 'searchUrl' => $relaxedUrl, 'searchNote' => ''];
-        }
-
-        // ─── 3-bosqich: Narxsiz, faqat joylashuv + maydon ──────────────────
-        $noPriceFilters = $filters;
-        unset($noPriceFilters['price_min'], $noPriceFilters['price_max'],
-              $noPriceFilters['price_min_uzs'], $noPriceFilters['price_max_uzs']);
-        $noPriceUrl = $this->buildUrl($noPriceFilters);
-        $result     = $this->filterByDistrict($this->fetchAllPages($noPriceUrl, 5), $noPriceFilters);
-
-        Log::info('OLX search URL (no price)', ['url' => $noPriceUrl, 'count' => count($result)]);
-
-        if (!empty($result)) {
-            return [
-                'listings'   => $result,
-                'searchUrl'  => $noPriceUrl,
-                'searchNote' => "💡 <i>Aniq filtrga mos e'lon topilmadi. Shu tumandagi barcha narxdagi e'lonlar ko'rsatilmoqda.</i>",
-            ];
-        }
-
-        if (microtime(true) - $startTime > 45) {
-             return ['listings' => [], 'searchUrl' => $noPriceUrl, 'searchNote' => ''];
-        }
-
-        // ─── 4-bosqich: Faqat viloyat bo'yicha (tuman va maydon olib tashlanadi) ─
-        // district_id va district_name ham olib tashlanadi — OLX butun viloyat bo'yicha qidirsin
-        $locationOnly = [
-            'mode'          => $filters['mode'] ?? 'ijara',
-            'property_type' => $filters['property_type'] ?? 'uy',
-            'region_name'   => $filters['region_name'] ?? '',
-        ];
-        $locationUrl = $this->buildUrl($locationOnly);
-
-        // Viloyat bo'yicha BARCHA sahifalarni yuklab olish
-        $allRegionListings = $this->fetchAllPages($locationUrl, 5); // max 5 sahifa (viloyat bo'yicha)
-
-        Log::info('OLX search fallback – region only', [
-            'url'   => $locationUrl,
-            'count' => count($allRegionListings),
-        ]);
-
-        if (!empty($allRegionListings)) {
-            // 1️⃣ Tuman nomi bo'yicha tartiblash — agar district_name berilgan bo'lsa
-            if (!empty($filters['district_name'])) {
-                $sortedByDistrict = $this->sortByDistrictProximity($allRegionListings, $filters['district_name']);
-
-                // Narx bo'yicha ham qo'shimcha tartiblash (agar narx berilgan bo'lsa)
-                if (!empty($filters['price_min']) || !empty($filters['price_max'])) {
-                    $result = array_slice(
-                        $this->sortByPriceProximity($sortedByDistrict, $filters['price_min'] ?? null, $filters['price_max'] ?? null),
-                        0, 10
-                    );
-                } else {
-                    $result = array_slice($sortedByDistrict, 0, 10);
-                }
-
-                Log::info('OLX search fallback – nearest district in region', ['count' => count($result)]);
-                return [
-                    'listings'   => $result,
-                    'searchUrl'  => $locationUrl,
-                    'searchNote' => "💡 <i>Aynan {$districtName} tumani uchun e'lon topilmadi. Shu viloyatdagi eng yaqin e'lonlar ko'rsatilmoqda.</i>",
-                ];
-            }
-
-            // 2️⃣ Faqat narx bo'yicha tartiblash
-            if (!empty($filters['price_min']) || !empty($filters['price_max'])) {
-                $sortedByPrice = $this->sortByPriceProximity($allRegionListings, $filters['price_min'] ?? null, $filters['price_max'] ?? null);
-                $result = array_slice($sortedByPrice, 0, 10);
-                Log::info('OLX search fallback – nearest price in region', ['count' => count($result)]);
-                return [
-                    'listings'   => $result,
-                    'searchUrl'  => $locationUrl,
-                    'searchNote' => "💡 <i>Narxga eng yaqin viloyat e'lonlari ko'rsatilmoqda.</i>",
-                ];
-            }
-
-            // 3️⃣ Hech qanday filtr — shunchaki viloyat e'lonlarini qaytarish
-            $result = array_slice($allRegionListings, 0, 10);
-            return [
-                'listings'   => $result,
-                'searchUrl'  => $locationUrl,
-                'searchNote' => "💡 <i>Filtrga mos e'lon topilmadi. Viloyat bo'yicha e'lonlar ko'rsatilmoqda.</i>",
-            ];
-        }
-
-        // Hech narsa topilmadi
+    if (microtime(true) - $startTime > 45) {
         return ['listings' => [], 'searchUrl' => $url, 'searchNote' => ''];
     }
+
+    // ─── 2-bosqich: Narx ±30% kengaytirish ───────────────────────────────
+    $relaxedFilters = $this->relaxPriceFilters($filters, 0.30);
+    $relaxedUrl     = $this->buildUrl($relaxedFilters);
+    $result         = $this->fetchAllPages($relaxedUrl, 5);
+
+    Log::info('OLX search step 2 (±30%)', ['url' => $relaxedUrl, 'count' => count($result)]);
+
+    if (!empty($result)) {
+        return [
+            'listings'   => $result,
+            'searchUrl'  => $relaxedUrl,
+            'searchNote' => "💡 <i>Narx oralig'i ±30% kengaytirildi.</i>",
+        ];
+    }
+
+    if (microtime(true) - $startTime > 45) {
+        return ['listings' => [], 'searchUrl' => $relaxedUrl, 'searchNote' => ''];
+    }
+
+    // ─── 3-bosqich: Narxsiz, faqat maydon + tuman ────────────────────────
+    $noPriceFilters = $filters;
+    unset(
+        $noPriceFilters['price_min'],
+        $noPriceFilters['price_max'],
+        $noPriceFilters['price_min_uzs'],
+        $noPriceFilters['price_max_uzs']
+    );
+    $noPriceUrl = $this->buildUrl($noPriceFilters);
+    $result     = $this->fetchAllPages($noPriceUrl, 5);
+
+    Log::info('OLX search step 3 (no price)', ['url' => $noPriceUrl, 'count' => count($result)]);
+
+    if (!empty($result)) {
+        return [
+            'listings'   => $result,
+            'searchUrl'  => $noPriceUrl,
+            'searchNote' => "💡 <i>Aniq narxga mos e'lon topilmadi. Shu tumandagi barcha e'lonlar ko'rsatilmoqda.</i>",
+        ];
+    }
+
+    if (microtime(true) - $startTime > 45) {
+        return ['listings' => [], 'searchUrl' => $noPriceUrl, 'searchNote' => ''];
+    }
+
+    // ─── 4-bosqich: Faqat viloyat bo'yicha ───────────────────────────────
+    $locationOnly = [
+        'mode'          => $filters['mode']          ?? 'ijara',
+        'property_type' => $filters['property_type'] ?? 'uy',
+        'region_name'   => $filters['region_name']   ?? '',
+        'currency'      => $filters['currency']      ?? 'uzs',
+    ];
+    $locationUrl       = $this->buildUrl($locationOnly);
+    $allRegionListings = $this->fetchAllPages($locationUrl, 8);
+
+    Log::info('OLX search step 4 (region only)', [
+        'url'   => $locationUrl,
+        'count' => count($allRegionListings),
+    ]);
+
+    if (!empty($allRegionListings)) {
+        // Tuman bo'yicha eng yaqin 20 ta
+        if (!empty($filters['district_name'])) {
+            $sorted = $this->sortByDistrictProximity($allRegionListings, $filters['district_name']);
+            $result = array_slice($sorted, 0, 20); // 10 emas 20
+        } else {
+            $result = array_slice($allRegionListings, 0, 20);
+        }
+
+        return [
+            'listings'   => $result,
+            'searchUrl'  => $locationUrl,
+            'searchNote' => "💡 <i>Aynan {$districtName} uchun e'lon topilmadi. Viloyat bo'yicha eng yaqin e'lonlar ko'rsatilmoqda.</i>",
+        ];
+    }
+
+    return ['listings' => [], 'searchUrl' => $url, 'searchNote' => ''];
+}
 
     /**
      * Helper: sort listings by price closeness to the target range.
