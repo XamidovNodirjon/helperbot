@@ -29,6 +29,139 @@ class OlxScraperService
         'Xorazm viloyati'        => 'khorezm',
     ];
 
+    // ─── Toshkent tumanlari OLX slug lari ─────────────────────────────────────
+// https://www.olx.uz/oz/nedvizhimost/kvartiry/tashkent/{slug}/
+private const DISTRICT_SLUGS = [
+    // Toshkent shahri tumanlari
+    'Bektemir tumani'      => 'bektemir',
+    'Chilonzor tumani'     => 'chilanzer',
+    'Mirobod tumani'       => 'mirobod',
+    'Mirzo Ulugbek tumani' => 'mirzo-ulugbekskiy',
+    'Olmazor tumani'       => 'almazar',
+    'Sergeli tumani'       => 'sergeli',
+    'Sirgali tumani'       => 'sergeli',
+    'Shayxontohur tumani'  => 'shaykhantakhur',
+    'Uchtepa tumani'       => 'uchtepa',
+    'Yakkasaroy tumani'    => 'yakkasaray',
+    'Yangihayot tumani'    => 'yangikhayot',
+    'Yashnobod tumani'     => 'yashnabad',
+    'Yunusobod tumani'     => 'yunusabad',
+
+    // Toshkent viloyati tumanlari
+    'Angren'               => 'angren',
+    'Bekabad'              => 'bekabad',
+    'Bo\'stonliq tumani'   => 'bostanlik',
+    'Bo\'ka tumani'        => 'buka',
+    'Chirchiq'             => 'chirchiq',
+    'Qibray tumani'        => 'kibray',
+    'Ohangaron tumani'     => 'akhangaran',
+    'Oqqo\'rg\'on tumani'  => 'akkurgan',
+    'Ortachirchiq tumani'  => 'srednechirchik',
+    'Parkent tumani'       => 'parkent',
+    'Piskent tumani'       => 'piskent',
+    'Quyi Chirchiq tumani' => 'nizhnechirchik',
+    'Toshkent tumani'      => 'tashkentskiy',
+    'Yangiyo\'l tumani'    => 'yangiyul',
+    'Yuqori Chirchiq tumani' => 'verkhnechirchik',
+    'Zangiota tumani'      => 'zangiata',
+];
+
+private function resolveDistrictSlug(string $districtName): string
+{
+    // To'g'ridan-to'g'ri map
+    if (isset(self::DISTRICT_SLUGS[$districtName])) {
+        return self::DISTRICT_SLUGS[$districtName];
+    }
+
+    // Qisman moslik
+    foreach (self::DISTRICT_SLUGS as $name => $slug) {
+        if (mb_stripos($districtName, mb_substr($name, 0, mb_strpos($name, ' ') ?: mb_strlen($name))) !== false) {
+            return $slug;
+        }
+    }
+
+    return '';
+}
+
+private function buildUrl(array $filters): string
+{
+    $mode         = $filters['mode']          ?? 'ijara';
+    $propertyType = $filters['property_type'] ?? 'uy';
+    $regionName   = $filters['region_name']   ?? '';
+    $districtName = $filters['district_name'] ?? '';
+
+    $categoryPath = self::CATEGORY_PATHS[$mode][$propertyType]
+                 ?? self::CATEGORY_PATHS['ijara']['uy'];
+
+    $regionSlug   = $this->resolveRegionSlug($regionName);
+    $districtSlug = $this->resolveDistrictSlug($districtName);
+
+    // Base URL: /oz/{category}/{region}/{district}/
+    $base = 'https://www.olx.uz/oz/' . $categoryPath;
+    if ($regionSlug) {
+        $base .= $regionSlug . '/';
+    }
+    if ($districtSlug) {
+        $base .= $districtSlug . '/';
+    }
+
+    $params   = [];
+    $currency = strtolower($filters['currency'] ?? 'uzs');
+
+    $params['currency'] = ($currency === 'usd' || $currency === 'uye') ? 'UYE' : 'UZS';
+
+    // Narx
+    if ($currency === 'uzs') {
+        $priceMin = $filters['price_min_uzs'] ?? ($filters['price_min'] ?? null);
+        $priceMax = $filters['price_max_uzs'] ?? ($filters['price_max'] ?? null);
+    } else {
+        $priceMin = $filters['price_min'] ?? null;
+        $priceMax = $filters['price_max'] ?? null;
+    }
+
+    if (!empty($priceMin)) {
+        $params['search[filter_float_price:from]'] = (int) $priceMin;
+    }
+    if (!empty($priceMax)) {
+        $params['search[filter_float_price:to]'] = (int) $priceMax;
+    }
+
+    // Tijorat turi
+    if (in_array($propertyType, ['dokon', 'ofis']) && isset(self::PREMISE_TYPE[$propertyType])) {
+        $params['search[filter_enum_premise_type][0]'] = self::PREMISE_TYPE[$propertyType];
+    }
+
+    // Maydon
+    if (!empty($filters['sqm_min'])) {
+        $params['search[filter_float_total_area:from]'] = (int) $filters['sqm_min'];
+    }
+    if (!empty($filters['sqm_max'])) {
+        $params['search[filter_float_total_area:to]'] = (int) $filters['sqm_max'];
+    }
+
+    // ❌ district_id YO'Q — OLX tanimaydi
+    // ✅ district endi URL PATH da: /tashkent/chilanzer/
+
+    $queryString = http_build_query($params);
+    $queryString = str_replace('%3A', ':', $queryString);
+
+    $url = $base . (empty($params) ? '' : '?' . $queryString);
+
+    Log::info('OLX buildUrl', [
+        'url'          => $url,
+        'region'       => $regionName,
+        'district'     => $districtName,
+        'districtSlug' => $districtSlug,
+        'currency'     => $params['currency'],
+        'price_from'   => $priceMin ?? '—',
+        'price_to'     => $priceMax ?? '—',
+        'sqm_from'     => $filters['sqm_min'] ?? '—',
+        'sqm_to'       => $filters['sqm_max'] ?? '—',
+    ]);
+
+    return $url;
+}
+
     // ─── mulk turi → OLX kategory yo'li ──────────────────────────────────────
     // mode: ijara | sotuvlar
     // property_type: uy | dokon | ofis
@@ -59,33 +192,40 @@ class OlxScraperService
      *
      * @return array{listings: list<array{title:string,price:string,location:string,url:string}>, searchUrl: string, searchNote: string}
      */
-    public function search(array $filters): array
+public function search(array $filters): array
 {
     $districtName = $filters['district_name'] ?? '';
     $startTime    = microtime(true);
 
-    // ─── 1-bosqich: district_id + barcha filtrlar ─────────────────────────
-    // district_id URL da bo'lgani uchun filterByDistrict KERAK EMAS
-    // OLX o'zi to'g'ri tumanlarni qaytaradi
-    $url    = $this->buildUrl($filters);
-    $result = $this->fetchAllPages($url, 5); // 3 emas, 5 sahifa
+    // ─── 1-bosqich: Barcha filtrlar, district CLIENT-SIDE ─────────────────
+    $url     = $this->buildUrl($filters);
+    $fetched = $this->fetchAllPages($url, 8);
+    $result  = $this->filterByDistrict($fetched, $filters);
 
-    Log::info('OLX search step 1', ['url' => $url, 'count' => count($result)]);
+    Log::info('OLX step 1', [
+        'fetched'  => count($fetched),
+        'filtered' => count($result),
+        'district' => $districtName,
+    ]);
 
     if (!empty($result)) {
         return ['listings' => $result, 'searchUrl' => $url, 'searchNote' => ''];
     }
 
-    if (microtime(true) - $startTime > 45) {
+    if (microtime(true) - $startTime > 50) {
         return ['listings' => [], 'searchUrl' => $url, 'searchNote' => ''];
     }
 
-    // ─── 2-bosqich: Narx ±30% kengaytirish ───────────────────────────────
+    // ─── 2-bosqich: Narx ±30% ────────────────────────────────────────────
     $relaxedFilters = $this->relaxPriceFilters($filters, 0.30);
     $relaxedUrl     = $this->buildUrl($relaxedFilters);
-    $result         = $this->fetchAllPages($relaxedUrl, 5);
+    $fetched        = $this->fetchAllPages($relaxedUrl, 8);
+    $result         = $this->filterByDistrict($fetched, $relaxedFilters);
 
-    Log::info('OLX search step 2 (±30%)', ['url' => $relaxedUrl, 'count' => count($result)]);
+    Log::info('OLX step 2 (±30%)', [
+        'fetched'  => count($fetched),
+        'filtered' => count($result),
+    ]);
 
     if (!empty($result)) {
         return [
@@ -95,62 +235,79 @@ class OlxScraperService
         ];
     }
 
-    if (microtime(true) - $startTime > 45) {
+    if (microtime(true) - $startTime > 50) {
         return ['listings' => [], 'searchUrl' => $relaxedUrl, 'searchNote' => ''];
     }
 
-    // ─── 3-bosqich: Narxsiz, faqat maydon + tuman ────────────────────────
+    // ─── 3-bosqich: Narxsiz ───────────────────────────────────────────────
     $noPriceFilters = $filters;
     unset(
-        $noPriceFilters['price_min'],
-        $noPriceFilters['price_max'],
-        $noPriceFilters['price_min_uzs'],
-        $noPriceFilters['price_max_uzs']
+        $noPriceFilters['price_min'], $noPriceFilters['price_max'],
+        $noPriceFilters['price_min_uzs'], $noPriceFilters['price_max_uzs']
     );
     $noPriceUrl = $this->buildUrl($noPriceFilters);
-    $result     = $this->fetchAllPages($noPriceUrl, 5);
+    $fetched    = $this->fetchAllPages($noPriceUrl, 8);
+    $result     = $this->filterByDistrict($fetched, $noPriceFilters);
 
-    Log::info('OLX search step 3 (no price)', ['url' => $noPriceUrl, 'count' => count($result)]);
+    Log::info('OLX step 3 (no price)', [
+        'fetched'  => count($fetched),
+        'filtered' => count($result),
+    ]);
 
     if (!empty($result)) {
         return [
             'listings'   => $result,
             'searchUrl'  => $noPriceUrl,
-            'searchNote' => "💡 <i>Aniq narxga mos e'lon topilmadi. Shu tumandagi barcha e'lonlar ko'rsatilmoqda.</i>",
+            'searchNote' => "💡 <i>Narxga mos e'lon topilmadi. {$districtName} dagi barcha e'lonlar ko'rsatilmoqda.</i>",
         ];
     }
 
-    if (microtime(true) - $startTime > 45) {
+    if (microtime(true) - $startTime > 50) {
         return ['listings' => [], 'searchUrl' => $noPriceUrl, 'searchNote' => ''];
     }
 
-    // ─── 4-bosqich: Faqat viloyat bo'yicha ───────────────────────────────
-    $locationOnly = [
+    // ─── 4-bosqich: Maydon va narxsiz, faqat tuman ────────────────────────
+    $minimalFilters = [
+        'mode'          => $filters['mode']          ?? 'ijara',
+        'property_type' => $filters['property_type'] ?? 'uy',
+        'region_name'   => $filters['region_name']   ?? '',
+        'district_name' => $filters['district_name'] ?? '',
+        'currency'      => $filters['currency']      ?? 'uzs',
+    ];
+    $minimalUrl = $this->buildUrl($minimalFilters);
+    $fetched    = $this->fetchAllPages($minimalUrl, 10);
+    $result     = $this->filterByDistrict($fetched, $minimalFilters);
+
+    Log::info('OLX step 4 (minimal)', [
+        'fetched'  => count($fetched),
+        'filtered' => count($result),
+    ]);
+
+    if (!empty($result)) {
+        return [
+            'listings'   => $result,
+            'searchUrl'  => $minimalUrl,
+            'searchNote' => "💡 <i>{$districtName} dagi barcha e'lonlar ko'rsatilmoqda.</i>",
+        ];
+    }
+
+    // ─── 5-bosqich: Faqat viloyat ─────────────────────────────────────────
+    $regionOnly = [
         'mode'          => $filters['mode']          ?? 'ijara',
         'property_type' => $filters['property_type'] ?? 'uy',
         'region_name'   => $filters['region_name']   ?? '',
         'currency'      => $filters['currency']      ?? 'uzs',
     ];
-    $locationUrl       = $this->buildUrl($locationOnly);
-    $allRegionListings = $this->fetchAllPages($locationUrl, 8);
+    $regionUrl = $this->buildUrl($regionOnly);
+    $fetched   = $this->fetchAllPages($regionUrl, 5);
 
-    Log::info('OLX search step 4 (region only)', [
-        'url'   => $locationUrl,
-        'count' => count($allRegionListings),
-    ]);
+    Log::info('OLX step 5 (region only)', ['fetched' => count($fetched)]);
 
-    if (!empty($allRegionListings)) {
-        // Tuman bo'yicha eng yaqin 20 ta
-        if (!empty($filters['district_name'])) {
-            $sorted = $this->sortByDistrictProximity($allRegionListings, $filters['district_name']);
-            $result = array_slice($sorted, 0, 20); // 10 emas 20
-        } else {
-            $result = array_slice($allRegionListings, 0, 20);
-        }
-
+    if (!empty($fetched)) {
+        $sorted = $this->sortByDistrictProximity($fetched, $districtName);
         return [
-            'listings'   => $result,
-            'searchUrl'  => $locationUrl,
+            'listings'   => array_slice($sorted, 0, 20),
+            'searchUrl'  => $regionUrl,
             'searchNote' => "💡 <i>Aynan {$districtName} uchun e'lon topilmadi. Viloyat bo'yicha eng yaqin e'lonlar ko'rsatilmoqda.</i>",
         ];
     }
@@ -211,6 +368,24 @@ class OlxScraperService
         return $listings;
     }
 
+    private function cleanLocation(string $location): string
+{
+    $cleaned = preg_replace(
+        '/\s*[-–]\s*(?:'
+        . 'Сегодня|Вчера|Сейчас'                          
+        . '|Понедельник|Вторник|Среда|Четверг|Пятница|Суббота|Воскресенье'  
+        . '|Bugun|Kecha|Hozir'                             
+        . '|Dushanba|Seshanba|Chorshanba|Payshanba|Juma|Shanba|Yakshanba'  
+        . '|\d{1,2}\s+\w+\s+\d{4}'                        
+        . '|\d{1,2}\.\d{2}\.\d{4}'                        
+        . ').*$/ui',
+        '',
+        $location
+    );
+
+    return trim($cleaned);
+}
+
     // Existing helper methods (addCurrencyParam, addPriceParams, addDistrictParam) remain unchanged.
 
 
@@ -219,92 +394,104 @@ class OlxScraperService
      * OLX ba'zan `reason=extended_search_no_results_distance` bilan boshqa
      * tumanlardan ham natija qaytaradi, shuning uchun DOIMO client-side filtrlash kerak.
      */
-    private function filterByDistrict(array $listings, array $filters): array
+private function filterByDistrict(array $listings, array $filters): array
 {
     $districtName = $filters['district_name'] ?? '';
-    $regionName   = $filters['region_name'] ?? '';
 
     if (empty($districtName)) {
         return $listings;
     }
 
+    // "Chilonzor tumani" → "chilonzor"
     $cleanDistrict = mb_strtolower(trim(
-        preg_replace('/\s*(tuman|tumani|district)\s*/ui', '', $districtName)
+        preg_replace('/\s*(tuman|tumani|district|район|р-н|ский|ской)\s*/ui', '', $districtName)
     ));
 
-    $districtWords = array_filter(
-        preg_split('/\s+/u', $cleanDistrict),
-        fn($w) => mb_strlen($w) >= 3
-    );
-
-    $cyrillicMap = [
-        'bektemir'     => 'бектемир',
-        'mirzo'        => 'мирзо',
-        'ulugbek'      => 'улугбек',
-        'mirobod'      => 'мирабад',
-        'olmazor'      => 'алмазар',
-        'sirgali'      => 'сергели',
-        'sergeli'      => 'сергели',
-        'uchtepa'      => 'учтепа',
-        'chilonzor'    => 'чиланзар',
-        'shayxontohur' => 'шайхантахур',
-        'yunusobod'    => 'юнусабад',
-        'yakkasaroy'   => 'яккасарай',
-        'yashnobod'    => 'яшнабад',
-        'yangihayot'   => 'янгихаёт',
+    // Toshkent tumanlari: O'zbek ↔ Rus ↔ Kirill to'liq map
+    $districtMap = [
+        // O'zbek nomi => [Kirill variantlar]
+        'chilonzor'    => ['чиланзар', 'чиланзарский', 'chilanzer'],
+        'yunusobod'    => ['юнусабад', 'юнусабадский'],
+        'mirzo ulugbek'=> ['мирзо-улугбекский', 'мирзо улугбек', 'mirzo-ulugbek'],
+        'mirzo'        => ['мирзо'],
+        'ulugbek'      => ['улугбек'],
+        'mirobod'      => ['мирабад', 'мирабадский'],
+        'olmazor'      => ['алмазар', 'алмазарский'],
+        'sergeli'      => ['сергели', 'сергелийский'],
+        'sirgali'      => ['сергели'],
+        'uchtepa'      => ['учтепа', 'учтепинский'],
+        'shayxontohur' => ['шайхантахур', 'шайхантахурский'],
+        'yakkasaroy'   => ['яккасарай', 'яккасарайский'],
+        'yashnobod'    => ['яшнабад', 'яшнабадский'],
+        'yangihayot'   => ['янгихаёт', 'янгихаётский'],
+        'bektemir'     => ['бектемир', 'бектемирский'],
     ];
 
-    $cyrillicWords = [];
-    foreach ($districtWords as $word) {
-        $normalized = preg_replace("/['\u{2018}\u{2019}`]/u", '', $word);
-        if (isset($cyrillicMap[$normalized])) {
-            $cyrillicWords[] = $cyrillicMap[$normalized];
+    // Ushbu district uchun barcha qidiruv so'zlari
+    $searchTerms = [$cleanDistrict];
+
+    // To'g'ridan-to'g'ri map dan olish
+    foreach ($districtMap as $latinKey => $cyrillicList) {
+        if (mb_stripos($cleanDistrict, $latinKey) !== false ||
+            mb_stripos($latinKey, $cleanDistrict) !== false) {
+            $searchTerms[] = $latinKey;
+            foreach ($cyrillicList as $cyrillic) {
+                $searchTerms[] = $cyrillic;
+            }
         }
     }
 
+    // Kirill → Lotin (teskari yo'nalish)
+    foreach ($districtMap as $latinKey => $cyrillicList) {
+        foreach ($cyrillicList as $cyrillic) {
+            if (mb_stripos($cleanDistrict, $cyrillic) !== false) {
+                $searchTerms[] = $latinKey;
+                foreach ($cyrillicList as $c) {
+                    $searchTerms[] = $c;
+                }
+            }
+        }
+    }
+
+    $searchTerms = array_unique(array_filter($searchTerms, fn($t) => mb_strlen($t) >= 3));
+
+    Log::info('filterByDistrict — qidiruv', [
+        'district_name' => $districtName,
+        'clean'         => $cleanDistrict,
+        'searchTerms'   => $searchTerms,
+        'total_in'      => count($listings),
+    ]);
+
     $filtered = array_values(array_filter(
         $listings,
-        function ($item) use ($cleanDistrict, $districtWords, $cyrillicWords) {
-            $loc = mb_strtolower($item['location'] ?? '');
+        function ($item) use ($searchTerms) {
+            $rawLoc = $item['location'] ?? '';
 
-            // 1) To'liq tuman nomi (lotin) — aniq moslik
-            if (mb_stripos($loc, $cleanDistrict) !== false) {
-                return true;
+            // Location yo'q bo'lsa o'tkazib yuboramiz
+            if (empty($rawLoc) || $rawLoc === '—') {
+                return false;
             }
 
-            // 2) Tuman so'zlari — faqat mustaqil so'z sifatida (vergul/bo'sh joy chegarasi)
-            // Masalan "chilonzor" → "chilonzor tumani" ✅, "Mirobod" → ✗
-            foreach ($districtWords as $word) {
-                // So'z boshida yoki ajratuvchi belgi oldida kelishi kerak
-                if (preg_match('/(?:^|[\s,;\/])' . preg_quote($word, '/') . '/ui', $loc)) {
+            // Sana qismini tozalash (agar parse vaqtida tozalanmagan bo'lsa)
+            $loc = mb_strtolower($this->cleanLocation($rawLoc));
+
+            foreach ($searchTerms as $term) {
+                if (mb_stripos($loc, $term) !== false) {
                     return true;
                 }
             }
-
-            // 3) Kirill variantlar — mustaqil so'z sifatida
-            foreach ($cyrillicWords as $word) {
-                if (preg_match('/(?:^|[\s,;\/])' . preg_quote($word, '/') . '/ui', $loc)) {
-                    return true;
-                }
-            }
-
-            // Viloyat nomi bo'yicha fallback OLIB TASHLANDI:
-            // "Toshkent" so'zi barcha Toshkent tumanlarida uchraydi,
-            // shuning uchun noto'g'ri tumanlar ham o'tib ketmoqda edi.
 
             return false;
         }
     ));
 
-    Log::info('filterByDistrict result', [
-        'district'     => $cleanDistrict,
-        'before_count' => count($listings),
-        'after_count'  => count($filtered),
+    Log::info('filterByDistrict — natija', [
+        'before' => count($listings),
+        'after'  => count($filtered),
     ]);
 
     return $filtered;
 }
-
 /**
  * Kvadrat metr va narx bo'yicha client-side filtrlash.
  * OLX URL parametrlari har doim to'g'ri ishlamaydi.
@@ -487,80 +674,77 @@ private function filterBySqmAndPrice(array $listings, array $filters): array
     // ─── URL yasash ───────────────────────────────────────────────────────────
 
     private function buildUrl(array $filters): string
-    {
-        $mode         = $filters['mode']          ?? 'ijara';
-        $propertyType = $filters['property_type'] ?? 'uy';
-        $regionName   = $filters['region_name']   ?? '';
+{
+    $mode         = $filters['mode']          ?? 'ijara';
+    $propertyType = $filters['property_type'] ?? 'uy';
+    $regionName   = $filters['region_name']   ?? '';
 
-        $categoryPath = self::CATEGORY_PATHS[$mode][$propertyType]
-                    ?? self::CATEGORY_PATHS['ijara']['uy'];
+    $categoryPath = self::CATEGORY_PATHS[$mode][$propertyType]
+                 ?? self::CATEGORY_PATHS['ijara']['uy'];
 
-        $regionSlug = $this->resolveRegionSlug($regionName);
+    $regionSlug = $this->resolveRegionSlug($regionName);
 
-        // /oz/ prefiksi bilan to'g'ri base URL
-        $base = 'https://www.olx.uz/oz/' . $categoryPath;
-        if ($regionSlug) {
-            $base .= $regionSlug . '/';
-        }
-
-        $params   = [];
-        $currency = strtolower($filters['currency'] ?? 'uzs');
-
-        // ─── Valyuta: dollar = UYE, so'm = UZS ───────────────────────────────
-        $params['currency'] = ($currency === 'usd' || $currency === 'uye') ? 'UYE' : 'UZS';
-
-        // ─── Narx filtri ──────────────────────────────────────────────────────
-        if ($currency === 'uzs') {
-            $priceMin = $filters['price_min_uzs'] ?? ($filters['price_min'] ?? null);
-            $priceMax = $filters['price_max_uzs'] ?? ($filters['price_max'] ?? null);
-        } else {
-            $priceMin = $filters['price_min'] ?? null;
-            $priceMax = $filters['price_max'] ?? null;
-        }
-
-        if (!empty($priceMin)) {
-            $params['search[filter_float_price:from]'] = (int) $priceMin;
-        }
-        if (!empty($priceMax)) {
-            $params['search[filter_float_price:to]'] = (int) $priceMax;
-        }
-
-        // ─── Tijorat mulk turi (dokon=1, ofis=4) ─────────────────────────────
-        if (in_array($propertyType, ['dokon', 'ofis']) && isset(self::PREMISE_TYPE[$propertyType])) {
-            $params['search[filter_enum_premise_type][0]'] = self::PREMISE_TYPE[$propertyType];
-        }
-
-        // ─── Maydon filtri ────────────────────────────────────────────────────
-        if (!empty($filters['sqm_min'])) {
-            $params['search[filter_float_total_area:from]'] = (int) $filters['sqm_min'];
-        }
-        if (!empty($filters['sqm_max'])) {
-            $params['search[filter_float_total_area:to]'] = (int) $filters['sqm_max'];
-        }
-
-        // ─── Tuman filtri ─────────────────────────────────────────────────────
-        if (!empty($filters['district_id'])) {
-            $params['search[district_id]'] = $filters['district_id'];
-        }
-
-        // http_build_query: [ ] ni %5B %5D qiladi, : ni %3A qiladi
-        // OLX : ni ochiq holda kutadi, shuning uchun qayta almashtirish
-        $queryString = http_build_query($params);
-        $queryString = str_replace('%3A', ':', $queryString);
-
-        Log::info('OLX buildUrl', [
-            'url'           => $base . '?' . $queryString,
-            'mode'          => $mode,
-            'property_type' => $propertyType,
-            'currency'      => $params['currency'],
-            'price_from'    => $priceMin ?? '—',
-            'price_to'      => $priceMax ?? '—',
-            'sqm_from'      => $filters['sqm_min'] ?? '—',
-            'sqm_to'        => $filters['sqm_max'] ?? '—',
-        ]);
-
-        return $base . (empty($params) ? '' : '?' . $queryString);
+    $base = 'https://www.olx.uz/oz/' . $categoryPath;
+    if ($regionSlug) {
+        $base .= $regionSlug . '/';
     }
+
+    $params   = [];
+    $currency = strtolower($filters['currency'] ?? 'uzs');
+
+    $params['currency'] = ($currency === 'usd' || $currency === 'uye') ? 'UYE' : 'UZS';
+
+    // Narx filtri
+    if ($currency === 'uzs') {
+        $priceMin = $filters['price_min_uzs'] ?? ($filters['price_min'] ?? null);
+        $priceMax = $filters['price_max_uzs'] ?? ($filters['price_max'] ?? null);
+    } else {
+        $priceMin = $filters['price_min'] ?? null;
+        $priceMax = $filters['price_max'] ?? null;
+    }
+
+    if (!empty($priceMin)) {
+        $params['search[filter_float_price:from]'] = (int) $priceMin;
+    }
+    if (!empty($priceMax)) {
+        $params['search[filter_float_price:to]'] = (int) $priceMax;
+    }
+
+    // Tijorat mulk turi
+    if (in_array($propertyType, ['dokon', 'ofis']) && isset(self::PREMISE_TYPE[$propertyType])) {
+        $params['search[filter_enum_premise_type][0]'] = self::PREMISE_TYPE[$propertyType];
+    }
+
+    // Maydon filtri
+    if (!empty($filters['sqm_min'])) {
+        $params['search[filter_float_total_area:from]'] = (int) $filters['sqm_min'];
+    }
+    if (!empty($filters['sqm_max'])) {
+        $params['search[filter_float_total_area:to]'] = (int) $filters['sqm_max'];
+    }
+
+    // ❌ district_id OLIB TASHLANDI — DB id != OLX id, OLX ni chalkashtiradi
+    // ✅ Buning o'rniga filterByDistrict() client-side ishlaydi
+
+    $queryString = http_build_query($params);
+    $queryString = str_replace('%3A', ':', $queryString);
+
+    $url = $base . (empty($params) ? '' : '?' . $queryString);
+
+    Log::info('OLX buildUrl', [
+        'url'           => $url,
+        'mode'          => $mode,
+        'property_type' => $propertyType,
+        'currency'      => $params['currency'],
+        'price_from'    => $priceMin ?? '—',
+        'price_to'      => $priceMax ?? '—',
+        'sqm_from'      => $filters['sqm_min'] ?? '—',
+        'sqm_to'        => $filters['sqm_max'] ?? '—',
+        'district'      => $filters['district_name'] ?? '—',
+    ]);
+
+    return $url;
+}
 
     // Helper methods for query parameters
     private function addCurrencyParam(array &$params, array $filters): void
@@ -776,111 +960,87 @@ private function filterBySqmAndPrice(array $listings, array $filters): array
      * data-cy="l-card" card'lardan sarlavha, narx, manzil, rasm oladi.
      */
     private function parseHtmlSelectors(string $html): array
-    {
-        $listings = [];
+{
+    $listings = [];
 
-        // Suppress HTML warnings
-        libxml_use_internal_errors(true);
-        $dom = new \DOMDocument();
-        @$dom->loadHTML('<?xml encoding="utf-8"?>' . $html, LIBXML_NOERROR | LIBXML_NOWARNING);
-        libxml_clear_errors();
+    libxml_use_internal_errors(true);
+    $dom = new \DOMDocument();
+    @$dom->loadHTML('<?xml encoding="utf-8"?>' . $html, LIBXML_NOERROR | LIBXML_NOWARNING);
+    libxml_clear_errors();
 
-        $xpath = new \DOMXPath($dom);
+    $xpath = new \DOMXPath($dom);
+    $cards = $xpath->query('//*[@data-cy="l-card"]');
 
-        // data-cy="l-card" card'larni topish
-        $cards = $xpath->query('//*[@data-cy="l-card"]');
-
-        if ($cards->length === 0) {
-            Log::info('parseHtmlSelectors: no l-card elements found (DOMDocument)');
-            return [];
-        }
-
-        Log::info('parseHtmlSelectors: found l-card elements', ['count' => $cards->length]);
-
-        foreach ($cards as $card) {
-            // E'lon linki: /d/oz/obyavlenie/ YOKI /d/obyavlenie/ formatlarini qo'llab-quvvatlash
-            $adLink = $xpath->query(
-                './/a[contains(@href, "/d/oz/obyavlenie/") or contains(@href, "/d/obyavlenie/")]',
-                $card
-            );
-            if ($adLink->length === 0) continue;
-
-            $href = $adLink->item(0)->getAttribute('href');
-            $url = str_starts_with($href, 'http') ? $href : 'https://www.olx.uz' . $href;
-
-            // Sarlavha: 1) data-cy="ad-title", 2) h4/h6/h3/h2, 3) strong/p, 4) eng uzun matn
-            $title = '';
-
-            // 1-usul: data-cy="ad-title" — OLX yangi versiyasi
-            $titleEl = $xpath->query('.//*[@data-cy="ad-title"]', $card);
-            if ($titleEl->length > 0) {
-                $title = trim($titleEl->item(0)->textContent);
-            }
-
-            // 2-usul: heading taglar
-            if (empty($title)) {
-                foreach (['h4', 'h6', 'h3', 'h2', 'h5'] as $tag) {
-                    $heading = $xpath->query('.//' . $tag, $card);
-                    if ($heading->length > 0) {
-                        $title = trim($heading->item(0)->textContent);
-                        if (!empty($title)) break;
-                    }
-                }
-            }
-
-            // 3-usul: strong yoki p teg
-            if (empty($title)) {
-                foreach (['strong', 'p'] as $tag) {
-                    $els = $xpath->query('.//' . $tag, $card);
-                    foreach ($els as $el) {
-                        $t = trim($el->textContent);
-                        if (mb_strlen($t) >= 10 && mb_strlen($t) <= 200) {
-                            $title = $t;
-                            break 2;
-                        }
-                    }
-                }
-            }
-
-            if (mb_strlen($title) < 3 || mb_strlen($title) > 200) continue;
-
-            // Narx: data-testid="ad-price" — <style> taglarni olib tashlash
-            $price = '—';
-            $priceEl = $xpath->query('.//*[@data-testid="ad-price"]', $card);
-            if ($priceEl->length > 0) {
-                $price = $this->getCleanText($priceEl->item(0));
-            }
-
-            // Manzil: data-testid="location-date" — <style> taglarni olib tashlash
-            $location = '—';
-            $locEl = $xpath->query('.//*[@data-testid="location-date"]', $card);
-            if ($locEl->length > 0) {
-                $location = $this->getCleanText($locEl->item(0));
-                // "Toshkent, Chilonzor - Bugun 14:45" => "Toshkent, Chilonzor tumani"
-                $location = preg_replace('/\s*-\s*(?:Bugun|Kecha|Dushanba|Seshanba|Chorshanba|Payshanba|Juma|Shanba|Yakshanba|Bugunda|\d).*$/ui', '', $location);
-            }
-
-            // Rasm: birinchi img
-            $thumbnail = '';
-            $imgEl = $xpath->query('.//img', $card);
-            if ($imgEl->length > 0) {
-                $thumbnail = $imgEl->item(0)->getAttribute('src');
-            }
-
-            $listings[] = [
-                'title'     => $title,
-                'price'     => $price,
-                'location'  => $location,
-                'url'       => $url,
-                'thumbnail' => $thumbnail,
-            ];
-
-            if (count($listings) >= 100) break;
-        }
-
-        Log::info('parseHtmlSelectors found', ['count' => count($listings)]);
-        return $listings;
+    if ($cards->length === 0) {
+        Log::info('parseHtmlSelectors: no l-card elements found');
+        return [];
     }
+
+    Log::info('parseHtmlSelectors: found l-card elements', ['count' => $cards->length]);
+
+    foreach ($cards as $card) {
+        $adLink = $xpath->query(
+            './/a[contains(@href, "/d/oz/obyavlenie/") or contains(@href, "/d/obyavlenie/")]',
+            $card
+        );
+        if ($adLink->length === 0) continue;
+
+        $href = $adLink->item(0)->getAttribute('href');
+        $url  = str_starts_with($href, 'http') ? $href : 'https://www.olx.uz' . $href;
+
+        // Sarlavha
+        $title   = '';
+        $titleEl = $xpath->query('.//*[@data-cy="ad-title"]', $card);
+        if ($titleEl->length > 0) {
+            $title = trim($titleEl->item(0)->textContent);
+        }
+        if (empty($title)) {
+            foreach (['h4', 'h6', 'h3', 'h2', 'h5'] as $tag) {
+                $heading = $xpath->query('.//' . $tag, $card);
+                if ($heading->length > 0) {
+                    $title = trim($heading->item(0)->textContent);
+                    if (!empty($title)) break;
+                }
+            }
+        }
+        if (mb_strlen($title) < 3 || mb_strlen($title) > 300) continue;
+
+        // Narx
+        $price   = '—';
+        $priceEl = $xpath->query('.//*[@data-testid="ad-price"]', $card);
+        if ($priceEl->length > 0) {
+            $price = $this->getCleanText($priceEl->item(0));
+        }
+
+        // Location — SANA QISMINI TOZALASH
+        $location = '—';
+        $locEl    = $xpath->query('.//*[@data-testid="location-date"]', $card);
+        if ($locEl->length > 0) {
+            $rawLocation = $this->getCleanText($locEl->item(0));
+            $location    = $this->cleanLocation($rawLocation);
+        }
+
+        // Thumbnail
+        $thumbnail = '';
+        $imgEl     = $xpath->query('.//img', $card);
+        if ($imgEl->length > 0) {
+            $thumbnail = $imgEl->item(0)->getAttribute('src');
+        }
+
+        $listings[] = [
+            'title'     => $title,
+            'price'     => $price,
+            'location'  => $location,
+            'url'       => $url,
+            'thumbnail' => $thumbnail,
+        ];
+
+        if (count($listings) >= 100) break;
+    }
+
+    Log::info('parseHtmlSelectors found', ['count' => count($listings)]);
+    return $listings;
+}
 
     /**
      * DOM elementdan toza matn olish — <style> va <script> taglarni olib tashlab.
