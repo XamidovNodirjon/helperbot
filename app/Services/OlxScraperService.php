@@ -108,16 +108,11 @@ private function buildUrl(array $filters): string
     $params   = [];
     $currency = strtolower($filters['currency'] ?? 'uzs');
 
-    $params['currency'] = ($currency === 'usd' || $currency === 'uye') ? 'UYE' : 'UZS';
+    $params['search[filter_enum_currency][0]'] = ($currency === 'usd' || $currency === 'uye') ? 'UYE' : 'UZS';
 
     // Narx
-    if ($currency === 'uzs') {
-        $priceMin = $filters['price_min_uzs'] ?? ($filters['price_min'] ?? null);
-        $priceMax = $filters['price_max_uzs'] ?? ($filters['price_max'] ?? null);
-    } else {
-        $priceMin = $filters['price_min'] ?? null;
-        $priceMax = $filters['price_max'] ?? null;
-    }
+    $priceMin = $filters['price_min'] ?? null;
+    $priceMax = $filters['price_max'] ?? null;
 
     if (!empty($priceMin)) {
         $params['search[filter_float_price:from]'] = (int) $priceMin;
@@ -152,7 +147,7 @@ private function buildUrl(array $filters): string
         'region'       => $regionName,
         'district'     => $districtName,
         'districtSlug' => $districtSlug,
-        'currency'     => $params['currency'],
+        'currency'     => $params['search[filter_enum_currency][0]'] ?? 'UZS',
         'price_from'   => $priceMin ?? '—',
         'price_to'     => $priceMax ?? '—',
         'sqm_from'     => $filters['sqm_min'] ?? '—',
@@ -242,8 +237,7 @@ public function search(array $filters): array
     // ─── 3-bosqich: Narxsiz ───────────────────────────────────────────────
     $noPriceFilters = $filters;
     unset(
-        $noPriceFilters['price_min'], $noPriceFilters['price_max'],
-        $noPriceFilters['price_min_uzs'], $noPriceFilters['price_max_uzs']
+        $noPriceFilters['price_min'], $noPriceFilters['price_max']
     );
     $noPriceUrl = $this->buildUrl($noPriceFilters);
     $fetched    = $this->fetchAllPages($noPriceUrl, 8);
@@ -306,7 +300,7 @@ public function search(array $filters): array
     if (!empty($fetched)) {
         $sorted = $this->sortByDistrictProximity($fetched, $districtName);
         return [
-            'listings'   => array_slice($sorted, 0, 20),
+            'listings'   => array_slice($sorted, 0, 1000),
             'searchUrl'  => $regionUrl,
             'searchNote' => "💡 <i>Aynan {$districtName} uchun e'lon topilmadi. Viloyat bo'yicha eng yaqin e'lonlar ko'rsatilmoqda.</i>",
         ];
@@ -492,47 +486,7 @@ private function filterByDistrict(array $listings, array $filters): array
 
     return $filtered;
 }
-/**
- * Kvadrat metr va narx bo'yicha client-side filtrlash.
- * OLX URL parametrlari har doim to'g'ri ishlamaydi.
- */
-private function filterBySqmAndPrice(array $listings, array $filters): array
-{
-    $sqmMin   = isset($filters['sqm_min'])   ? (int) $filters['sqm_min']   : null;
-    $sqmMax   = isset($filters['sqm_max'])   ? (int) $filters['sqm_max']   : null;
-    $currency = strtolower($filters['currency'] ?? 'uzs');
 
-    if ($currency === 'usd') {
-        $priceMin = isset($filters['price_min']) ? (float) $filters['price_min'] : null;
-        $priceMax = isset($filters['price_max']) ? (float) $filters['price_max'] : null;
-    } else {
-        $priceMin = isset($filters['price_min_uzs']) ? (float) $filters['price_min_uzs'] : null;
-        $priceMax = isset($filters['price_max_uzs']) ? (float) $filters['price_max_uzs'] : null;
-    }
-
-    // Agar hech qanday filtr yo'q bo'lsa — filtrlashning hojati yo'q
-    if ($sqmMin === null && $sqmMax === null && $priceMin === null && $priceMax === null) {
-        return $listings;
-    }
-
-    return array_values(array_filter(
-        $listings,
-        function ($item) use ($sqmMin, $sqmMax, $priceMin, $priceMax) {
-            // ─── Narx tekshiruvi ──────────────────────────────────────────
-            $itemPrice = $this->extractPrice($item['price'] ?? '');
-            if ($itemPrice !== null) {
-                if ($priceMin !== null && $itemPrice < $priceMin * 0.5) {
-                    return false; // Narx juda past (±50% tolerance)
-                }
-                if ($priceMax !== null && $itemPrice > $priceMax * 1.5) {
-                    return false; // Narx juda yuqori (±50% tolerance)
-                }
-            }
-
-            return true; // sqm listing ichida ko'rinmaydi, faqat detail sahifada
-        }
-    ));
-}
 
     // ─── Narx filtrlarini kengaytirish ──────────────────────────────────────────
 
@@ -541,39 +495,21 @@ private function filterBySqmAndPrice(array $listings, array $filters): array
         $relaxed  = $filters;
         $currency = strtolower($filters['currency'] ?? 'uzs');
 
-        if ($currency === 'usd') {
-            // USD da to'g'ridan-to'g'ri kengaytirish
-            $priceMin = (int) ($filters['price_min'] ?? 0);
-            $priceMax = (int) ($filters['price_max'] ?? 0);
+        $priceMin = (int) ($filters['price_min'] ?? 0);
+        $priceMax = (int) ($filters['price_max'] ?? 0);
 
-            if ($priceMin > 0) {
-                $relaxed['price_min'] = (int) max(0, $priceMin * (1 - $percent));
-            }
-            if ($priceMax > 0) {
-                $relaxed['price_max'] = (int) ($priceMax * (1 + $percent));
-            }
-        } else {
-            // UZS da kengaytirish — price_min_uzs / price_max_uzs dan o'qish
-            $priceMin = (int) ($filters['price_min_uzs'] ?? ($filters['price_min'] ?? 0));
-            $priceMax = (int) ($filters['price_max_uzs'] ?? ($filters['price_max'] ?? 0));
-
-            if ($priceMin > 0) {
-                $newMin = (int) max(0, $priceMin * (1 - $percent));
-                $relaxed['price_min']     = $newMin;
-                $relaxed['price_min_uzs'] = $newMin;
-            }
-            if ($priceMax > 0) {
-                $newMax = (int) ($priceMax * (1 + $percent));
-                $relaxed['price_max']     = $newMax;
-                $relaxed['price_max_uzs'] = $newMax;
-            }
+        if ($priceMin > 0) {
+            $relaxed['price_min'] = (int) max(0, $priceMin * (1 - $percent));
+        }
+        if ($priceMax > 0) {
+            $relaxed['price_max'] = (int) ($priceMax * (1 + $percent));
         }
 
         Log::info('OLX relaxPriceFilters — narx kengaytirildi', [
             'percent'   => ($percent * 100) . '%',
             'currency'  => strtoupper($currency),
-            'price_min' => $relaxed['price_min_uzs'] ?? $relaxed['price_min'] ?? '—',
-            'price_max' => $relaxed['price_max_uzs'] ?? $relaxed['price_max'] ?? '—',
+            'price_min' => $relaxed['price_min'] ?? '—',
+            'price_max' => $relaxed['price_max'] ?? '—',
         ]);
 
         return $relaxed;
@@ -670,81 +606,6 @@ private function filterBySqmAndPrice(array $listings, array $filters): array
             return [];
         }
     }
-
-    // ─── URL yasash ───────────────────────────────────────────────────────────
-
-    private function buildUrl(array $filters): string
-{
-    $mode         = $filters['mode']          ?? 'ijara';
-    $propertyType = $filters['property_type'] ?? 'uy';
-    $regionName   = $filters['region_name']   ?? '';
-
-    $categoryPath = self::CATEGORY_PATHS[$mode][$propertyType]
-                 ?? self::CATEGORY_PATHS['ijara']['uy'];
-
-    $regionSlug = $this->resolveRegionSlug($regionName);
-
-    $base = 'https://www.olx.uz/oz/' . $categoryPath;
-    if ($regionSlug) {
-        $base .= $regionSlug . '/';
-    }
-
-    $params   = [];
-    $currency = strtolower($filters['currency'] ?? 'uzs');
-
-    $params['currency'] = ($currency === 'usd' || $currency === 'uye') ? 'UYE' : 'UZS';
-
-    // Narx filtri
-    if ($currency === 'uzs') {
-        $priceMin = $filters['price_min_uzs'] ?? ($filters['price_min'] ?? null);
-        $priceMax = $filters['price_max_uzs'] ?? ($filters['price_max'] ?? null);
-    } else {
-        $priceMin = $filters['price_min'] ?? null;
-        $priceMax = $filters['price_max'] ?? null;
-    }
-
-    if (!empty($priceMin)) {
-        $params['search[filter_float_price:from]'] = (int) $priceMin;
-    }
-    if (!empty($priceMax)) {
-        $params['search[filter_float_price:to]'] = (int) $priceMax;
-    }
-
-    // Tijorat mulk turi
-    if (in_array($propertyType, ['dokon', 'ofis']) && isset(self::PREMISE_TYPE[$propertyType])) {
-        $params['search[filter_enum_premise_type][0]'] = self::PREMISE_TYPE[$propertyType];
-    }
-
-    // Maydon filtri
-    if (!empty($filters['sqm_min'])) {
-        $params['search[filter_float_total_area:from]'] = (int) $filters['sqm_min'];
-    }
-    if (!empty($filters['sqm_max'])) {
-        $params['search[filter_float_total_area:to]'] = (int) $filters['sqm_max'];
-    }
-
-    // ❌ district_id OLIB TASHLANDI — DB id != OLX id, OLX ni chalkashtiradi
-    // ✅ Buning o'rniga filterByDistrict() client-side ishlaydi
-
-    $queryString = http_build_query($params);
-    $queryString = str_replace('%3A', ':', $queryString);
-
-    $url = $base . (empty($params) ? '' : '?' . $queryString);
-
-    Log::info('OLX buildUrl', [
-        'url'           => $url,
-        'mode'          => $mode,
-        'property_type' => $propertyType,
-        'currency'      => $params['currency'],
-        'price_from'    => $priceMin ?? '—',
-        'price_to'      => $priceMax ?? '—',
-        'sqm_from'      => $filters['sqm_min'] ?? '—',
-        'sqm_to'        => $filters['sqm_max'] ?? '—',
-        'district'      => $filters['district_name'] ?? '—',
-    ]);
-
-    return $url;
-}
 
     // Helper methods for query parameters
     private function addCurrencyParam(array &$params, array $filters): void

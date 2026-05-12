@@ -253,19 +253,8 @@ class IjaraFlowHandler
             return true;
         }
 
-        // Narxlarni UZS ga konvertatsiya qilish (OLX UZS da ishlaydi)
-        $priceMinUzs = $priceMin;
-        $priceMaxUzs = (int) $clean;
-
-        if ($currency === 'usd') {
-            $priceMinUzs = $priceMin * self::getUsdRate();
-            $priceMaxUzs = (int) $clean * self::getUsdRate();
-        }
-
         $state->nextStep(UserState::STEP_DONE, [
             'price_max'     => (int) $clean,
-            'price_min_uzs' => $priceMinUzs,
-            'price_max_uzs' => $priceMaxUzs,
         ]);
 
         // Yakuniy xulosa
@@ -298,13 +287,8 @@ class IjaraFlowHandler
         $priceText = self::formatMoney($data['price_min']) .
             " – " . self::formatMoney($data['price_max']) . " {$currencyLabel}";
 
-        // Agar USD bo'lsa, UZS ekvivalentini ham ko'rsatamiz
+        // Agar USD bo'lsa, UZS ekvivalentini ko'rsatmaymiz, chunki kurs o'zgaruvchan
         $convertNote = '';
-        if ($currency === 'usd') {
-            $convertNote = "\n💱 <i>≈ " . self::formatMoney($data['price_min_uzs']) .
-                " – " . self::formatMoney($data['price_max_uzs']) . " so'm</i>" .
-                "\n<i>(1$ ≈ " . number_format(self::getUsdRate(), 0, '.', ' ') . " so'm)</i>";
-        }
 
         Telegram::sendMessage([
             'chat_id'      => $chatId,
